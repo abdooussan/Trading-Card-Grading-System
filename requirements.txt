@@ -1,7 +1,7 @@
 # requirements.txt core dependencies
 
 # Computer Vision
-opencv-python-headless==4.13.0.90
+opencv-python-headless==4.8.1.78
 pillow>=10.0.0
 scikit-image>=0.21.0
 
