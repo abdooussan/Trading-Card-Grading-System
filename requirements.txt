@@ -1,7 +1,7 @@
 # Core dependencies
 numpy
 opencv-python-headless==4.13.0.90
-opencv-contrib-python>=4.5.0
+
 scipy>=1.7.0
 
 # Image processing
