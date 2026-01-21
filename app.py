@@ -196,7 +196,7 @@ class AdvancedCardDetector:
                 # Use minimum area rectangle as fallback
                 if len(approx) != 4:
                     box = cv2.boxPoints(rect)
-                    approx = np.int0(box)
+                    approx = box.astype(int)
             
             # Calculate corner quality
             corner_quality = self.calculate_corner_quality(approx)
@@ -1238,7 +1238,7 @@ class AdvancedEdgeAnalyzer:
         # Get the four corners (assuming rectangular card)
         rect = cv2.minAreaRect(contour)
         box = cv2.boxPoints(rect)
-        box = np.int0(box)
+        box = box.astype(int)
         
         # Sort corners: top-left, top-right, bottom-right, bottom-left
         corners = self._order_corners(box)
@@ -1380,7 +1380,7 @@ def create_visualization(image: np.ndarray, contour: np.ndarray,
     # Get corners for edge positioning
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
-    box = np.int0(box)
+    box = box.astype(int)
     
     # Draw edge quality indicators at midpoints
     h, w = image.shape[:2]
@@ -1504,7 +1504,7 @@ def create_heatmap(image: np.ndarray, contour: np.ndarray,
     # Get corners
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
-    box = np.int0(box)
+    box = box.astype(int)
     
     # Draw edge heatmaps with thicker lines
     edge_thickness = 25
