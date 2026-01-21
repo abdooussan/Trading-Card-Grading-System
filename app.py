@@ -90,7 +90,10 @@ class AdvancedCardDetector:
                 # Remove small noise
                 opened = cv2.morphologyEx(closed, cv2.MORPH_OPEN, kernel, iterations=1)
                 results[i] = opened
-        
+        # If no results, use the entire grayscale image
+        if not results:
+                    results.append(gray)
+                    
         return results
     
     def calculate_rectangularity(self, contour: np.ndarray) -> float:
@@ -193,7 +196,7 @@ class AdvancedCardDetector:
                 # Use minimum area rectangle as fallback
                 if len(approx) != 4:
                     box = cv2.boxPoints(rect)
-                    approx = box.astype(np.int32)
+                    approx = np.int0(box)
             
             # Calculate corner quality
             corner_quality = self.calculate_corner_quality(approx)
@@ -238,14 +241,38 @@ class AdvancedCardDetector:
             ValueError: If no valid card contour is detected
         """
         # Get multiple preprocessed versions
+        # Get multiple preprocessed versions
         thresh_images = self.preprocess_advanced(image)
-        
+
         all_candidates = []
-        
+
         # Extract candidates from each preprocessing strategy
         for thresh in thresh_images:
-            candidates = self.extract_card_candidates(image, thresh)
-            all_candidates.extend(candidates)
+                    candidates = self.extract_card_candidates(image, thresh)
+                    all_candidates.extend(candidates)
+
+        # If no candidates found, use the entire image as the card
+        if not all_candidates:
+                    h, w = image.shape[:2]
+                    # Create a contour representing the entire image
+                    entire_image_contour = np.array([
+                    [[0, 0]],
+                    [[w-1, 0]],
+                    [[w-1, h-1]],
+                    [[0, h-1]]
+                    ], dtype=np.int32)
+                    
+        image_area = h * w
+        aspect_ratio = max(w, h) / min(w, h)
+    
+        # Create a candidate for the entire image with a moderate score
+        all_candidates.append(CardCandidate(
+                    contour=entire_image_contour,
+                    area=image_area,
+                    aspect_ratio=aspect_ratio,
+                    rectangularity=1.0,  # Perfect rectangle
+                    score=0.5  # Moderate score since it's a fallback
+                    ))
         
         if not all_candidates:
             raise ValueError(
@@ -1211,7 +1238,7 @@ class AdvancedEdgeAnalyzer:
         # Get the four corners (assuming rectangular card)
         rect = cv2.minAreaRect(contour)
         box = cv2.boxPoints(rect)
-        box = box.astype(np.int32)
+        box = np.int0(box)
         
         # Sort corners: top-left, top-right, bottom-right, bottom-left
         corners = self._order_corners(box)
@@ -1353,7 +1380,7 @@ def create_visualization(image: np.ndarray, contour: np.ndarray,
     # Get corners for edge positioning
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
-    box = box.astype(np.int32)
+    box = np.int0(box)
     
     # Draw edge quality indicators at midpoints
     h, w = image.shape[:2]
@@ -1477,7 +1504,7 @@ def create_heatmap(image: np.ndarray, contour: np.ndarray,
     # Get corners
     rect = cv2.minAreaRect(contour)
     box = cv2.boxPoints(rect)
-    box = box.astype(np.int32)
+    box = np.int0(box)
     
     # Draw edge heatmaps with thicker lines
     edge_thickness = 25
