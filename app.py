@@ -2176,12 +2176,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-import sys, cv2, numpy as np
-import streamlit as st
-
-st.write("Python:", sys.version)
-st.write("OpenCV:", cv2.__version__)
-st.write("NumPy:", np.__version__)
 # Custom CSS
 st.markdown("""
 <style>
