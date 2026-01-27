@@ -2107,7 +2107,8 @@ def main():
                 try:
                     cardanalyzer = CardAnalyzer()
                     centering_score , _ = cardanalyzer.calculate_centering_score(image, contour)
-                    scores.append( np.float64(centering_score*100))
+                    centering_score = centering_score*100
+                    scores.append( np.float64(centering_score))
                     print("centering_score : ", centering_score)
                     col1, col2 = st.columns(2)
                     
