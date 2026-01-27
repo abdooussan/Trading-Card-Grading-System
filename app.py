@@ -1712,7 +1712,6 @@ def main():
                             st.write(f"**Aspect Ratio**: {debug_info['aspect_ratio']:.2f}")
                 
             except Exception as e:
-                st.error(f"❌ Could not detect card: {str(e)}")
                 st.info("Please ensure the card is clearly visible and takes up most of the image.")
                 return
         
