@@ -493,6 +493,229 @@ class AdvancedCardDetector2:
         return ordered.reshape(4, 1, 2).astype(np.int32)
 
 
+import cv2
+import numpy as np
+from typing import Tuple, Dict, Optional
+
+class CardAnalyzer:
+    """Complete card detection and centering analysis"""
+    
+    def __init__(self):
+        # Card detection parameters
+        self.min_card_area_ratio = 0.3
+        self.max_card_area_ratio = 0.95
+        self.aspect_ratio_range = (1.2, 1.9)
+        
+    def detect_and_analyze(self, image: np.ndarray, debug: bool = False) -> Dict:
+        """
+        Complete pipeline: detect card and calculate centering score.
+        
+        Args:
+            image: Input image (BGR format)
+            debug: Return debug information
+            
+        Returns:
+            Dictionary with detection and centering results
+        """
+        # Step 1: Detect card contour
+        contour, detection_info = self.detect_card_contour(image, debug=debug)
+        
+        if contour is None:
+            return {
+                'success': False,
+                'error': 'Card not detected'
+            }
+        
+        # Step 2: Calculate centering score
+        centering_score, centering_info = self.calculate_centering_score(
+            image, contour, debug=debug
+        )
+        
+        # Step 3: Compile results
+        results = {
+            'success': True,
+            'contour': contour,
+            'centering_score': centering_score,
+            'centering_percentage': centering_score * 100,
+            'centering_quality': self.get_centering_quality(centering_score)
+        }
+        
+        if debug:
+            results['detection_info'] = detection_info
+            results['centering_info'] = centering_info
+        
+        return results
+    
+    def detect_card_contour(self, image: np.ndarray, debug: bool = False) -> Tuple[Optional[np.ndarray], Optional[Dict]]:
+        """Detect the card contour in the image"""
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edges = cv2.Canny(blurred, 50, 150)
+        
+        # Dilate to close gaps
+        kernel = np.ones((3, 3), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=2)
+        
+        # Find contours
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        if len(contours) == 0:
+            return None, None
+        
+        image_area = image.shape[0] * image.shape[1]
+        
+        best_contour = None
+        best_score = 0
+        debug_info = None
+        
+        for contour in contours:
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            
+            if len(approx) == 4:
+                area = cv2.contourArea(approx)
+                area_ratio = area / image_area
+                
+                if self.min_card_area_ratio <= area_ratio <= self.max_card_area_ratio:
+                    rect = cv2.minAreaRect(approx)
+                    width, height = rect[1]
+                    
+                    if width > 0 and height > 0:
+                        aspect_ratio = max(width, height) / min(width, height)
+                        
+                        if self.aspect_ratio_range[0] <= aspect_ratio <= self.aspect_ratio_range[1]:
+                            confidence = area_ratio * (1 - abs(aspect_ratio - 1.586) / 1.586)
+                            
+                            if confidence > best_score:
+                                best_score = confidence
+                                best_contour = approx
+                                
+                                if debug:
+                                    debug_info = {
+                                        'confidence': confidence,
+                                        'area': area,
+                                        'area_ratio': area_ratio,
+                                        'aspect_ratio': aspect_ratio,
+                                        'corners': len(approx)
+                                    }
+        
+        # Fallback to largest contour
+        if best_contour is None:
+            best_contour = max(contours, key=cv2.contourArea)
+            if debug:
+                area = cv2.contourArea(best_contour)
+                debug_info = {
+                    'confidence': 0.5,
+                    'area': area,
+                    'area_ratio': area / image_area,
+                    'aspect_ratio': 0,
+                    'corners': len(best_contour)
+                }
+        
+        return best_contour, debug_info
+    
+    def calculate_centering_score(self, image: np.ndarray, contour: np.ndarray, 
+                                  debug: bool = False) -> Tuple[float, Optional[Dict]]:
+        """
+        Calculate centering score based on card position.
+        
+        Method: Find left and right edges of the card, calculate margin ratio.
+        Score = min(left_margin, right_margin) / max(left_margin, right_margin)
+        """
+        height, width = image.shape[:2]
+        
+        # Get bounding box of the card
+        x, y, w, h = cv2.boundingRect(contour)
+        
+        # Calculate margins
+        left_margin = x
+        right_margin = width - (x + w)
+        
+        # Calculate centering score
+        if left_margin == 0 and right_margin == 0:
+            centering_score = 1.0
+        elif left_margin == 0 or right_margin == 0:
+            centering_score = 0.0
+        else:
+            # Ratio method: closer to 1.0 means better centered
+            centering_score = min(left_margin, right_margin) / max(left_margin, right_margin)
+        
+        debug_info = None
+        if debug:
+            debug_info = {
+                'left_margin': left_margin,
+                'right_margin': right_margin,
+                'left_edge_position': x,
+                'right_edge_position': x + w,
+                'card_width': w,
+                'image_width': width,
+                'margin_difference': abs(left_margin - right_margin),
+                'centering_score': centering_score,
+                'centering_percentage': centering_score * 100
+            }
+        
+        return centering_score, debug_info
+    
+    def get_centering_quality(self, score: float) -> str:
+        """Get text description of centering quality"""
+        if score >= 0.95:
+            return "Excellent - Perfectly Centered"
+        elif score >= 0.85:
+            return "Very Good - Well Centered"
+        elif score >= 0.70:
+            return "Good - Adequately Centered"
+        elif score >= 0.50:
+            return "Fair - Slightly Off-Center"
+        else:
+            return "Poor - Significantly Off-Center"
+    
+    def visualize_results(self, image: np.ndarray, results: Dict) -> np.ndarray:
+        """Create visualization with card detection and centering analysis"""
+        vis_image = image.copy()
+        height, width = vis_image.shape[:2]
+        
+        if not results['success']:
+            return vis_image
+        
+        # Draw card contour
+        cv2.drawContours(vis_image, [results['contour']], -1, (0, 255, 0), 3)
+        
+        if 'centering_info' in results:
+            info = results['centering_info']
+            
+            # Draw left edge line
+            left_x = info['left_edge_position']
+            cv2.line(vis_image, (left_x, 0), (left_x, height), (255, 0, 0), 2)
+            
+            # Draw right edge line
+            right_x = info['right_edge_position']
+            cv2.line(vis_image, (right_x, 0), (right_x, height), (255, 0, 0), 2)
+            
+            # Draw image center line
+            center_x = width // 2
+            cv2.line(vis_image, (center_x, 0), (center_x, height), (0, 255, 255), 2)
+            
+            # Draw card center line
+            card_center = (left_x + right_x) // 2
+            cv2.line(vis_image, (card_center, 0), (card_center, height), (255, 0, 255), 2)
+            
+            # Add text annotations
+            cv2.putText(vis_image, f"Left: {info['left_margin']}px", 
+                       (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(vis_image, f"Right: {info['right_margin']}px", 
+                       (width - 200, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            cv2.putText(vis_image, f"Score: {results['centering_percentage']:.1f}%", 
+                       (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(vis_image, results['centering_quality'], 
+                       (10, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+        
+        return vis_image
+
+
+# ============================================================================
+# USAGE EXAMPLE
+# ============================================================================
+
 # Usage example:
 def detect_card_contour(image: np.ndarray, debug: bool = False) -> np.ndarray:
     """
@@ -1882,8 +2105,9 @@ def main():
             
             with st.spinner("Analyzing centering..."):
                 try:
-                    centering_score = analyze_card_centering(image, contour)
-                    scores.append(centering_score)
+                    cardanalyzer = CardAnalyzer()
+                    centering_score , _ = cardanalyzer.calculate_centering_score(image, contour)
+                    scores.append( np.float64(centering_score*100))
                     print("centering_score : ", centering_score)
                     col1, col2 = st.columns(2)
                     
@@ -1980,6 +2204,7 @@ def main():
         
         # Final Score
         if scores:
+            print("scores :",scores)
             st.divider()
             st.header("🏆 FINAL GRADE")
             
