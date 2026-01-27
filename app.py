@@ -354,7 +354,7 @@ import cv2
 import numpy as np
 from typing import Tuple, Dict
 
-def analyze_card_centering(image: np.ndarray, contour: np.ndarray) -> Tuple[float, Dict]:
+def analyze_card_centering(image: np.ndarray, contour: np.ndarray) -> float:
     """
     Analyzes trading card centering using gradient-based border detection.
     
@@ -363,9 +363,7 @@ def analyze_card_centering(image: np.ndarray, contour: np.ndarray) -> Tuple[floa
         contour: Contour of the card region
     
     Returns:
-        Tuple of (psa_score, details_dict)
-        - psa_score: Float from 1-10 matching PSA grading standards
-        - details_dict: Contains ratios, margins, and confidence metrics
+        Float score from 0-100 representing centering quality (mean of L/R and T/B ratios)
     """
     # Extract card region
     x, y, w, h = cv2.boundingRect(contour)
@@ -419,44 +417,13 @@ def analyze_card_centering(image: np.ndarray, contour: np.ndarray) -> Tuple[floa
         # Fallback: assume moderate centering issues
         left_margin = right_margin = w * 0.1
         top_margin = bottom_margin = h * 0.1
-        confidence = 0.0
-    else:
-        # Calculate confidence based on peak strength
-        peak_strength = (
-            vertical_smooth[left_border] + 
-            vertical_smooth[right_border] + 
-            horizontal_smooth[top_border] + 
-            horizontal_smooth[bottom_border]
-        ) / 4
-        mean_strength = (np.mean(vertical_smooth) + np.mean(horizontal_smooth)) / 2
-        confidence = min(peak_strength / mean_strength * 50, 100) if mean_strength > 0 else 50.0
     
     # Calculate centering ratios (smaller/larger * 100)
     lr_ratio = min(left_margin, right_margin) / max(left_margin, right_margin) * 100
     tb_ratio = min(top_margin, bottom_margin) / max(top_margin, bottom_margin) * 100
     avg_ratio = (lr_ratio + tb_ratio) / 2
     
-    # Convert to PSA score based on official standards
-    # PSA 10: 55/45 or better (88.89%)
-    # PSA 9: 60/40 or better (66.67%)
-    # PSA 8: 65/35 or better (53.85%)
-    # PSA 7: 70/30 or better (42.86%)
-    psa_score  =avg_ratio
-  
-    # Return results
-    details = {
-        "psa_score": round(psa_score, 2),
-        "lr_ratio": round(lr_ratio, 2),
-        "tb_ratio": round(tb_ratio, 2),
-        "overall_ratio": round(avg_ratio, 2),
-        "left_margin": round(left_margin, 2),
-        "right_margin": round(right_margin, 2),
-        "top_margin": round(top_margin, 2),
-        "bottom_margin": round(bottom_margin, 2),
-        "confidence": round(confidence, 2)
-    }
-    
-    return psa_score, details
+    return round(avg_ratio, 2)
 
 
 
@@ -989,12 +956,12 @@ class AdvancedCornerAnalyzer:
         self,
         image: np.ndarray,
         contour: np.ndarray
-    ) -> Tuple[float, Dict]:
+    ) -> float:
         """
         Main analysis function using advanced methods
         
         Returns:
-            Tuple of (overall_score, detailed_results)
+            Float score from 0-100 representing overall corner quality (mean of all corners)
         """
         if contour.shape[0] != 4:
             raise ValueError(f"Contour must have 4 points, got {contour.shape[0]}")
@@ -1003,107 +970,20 @@ class AdvancedCornerAnalyzer:
         corner_regions = self.extract_rotated_corners(image, contour)
         
         # Extract features for each corner
-        all_features = []
         corner_scores = []
-        corner_results = []
         
-        corner_names = ['Top-Left', 'Top-Right', 'Bottom-Right', 'Bottom-Left']
-        
-        for i, (region, name) in enumerate(zip(corner_regions, corner_names)):
+        for region in corner_regions:
             # Extract deep features
             features = self.extract_deep_features(region)
-            all_features.append(features)
             
             # Compute score
             score = self.compute_corner_score(features)
             corner_scores.append(score)
-            
-            # Store results
-            corner_results.append({
-                'name': name,
-                'score': round(score, 2),
-                'features': {
-                    'whitening': round(features.whitening_score, 4),
-                    'edge_sharpness': round(features.edge_sharpness, 4),
-                    'corner_strength': round(features.corner_strength, 4),
-                    'lbp_uniformity': round(features.lbp_uniformity, 4),
-                    'gabor_response': round(features.gabor_response, 4),
-                    'crease_score': round(features.crease_score, 4),
-                    'fractal_dimension': round(features.fractal_dimension, 4),
-                    'homogeneity': round(features.homogeneity, 4),
-                    'high_freq_energy': round(features.high_freq_energy, 4)
-                }
-            })
         
-        # Anomaly detection
-        corner_scores_array = np.array(corner_scores)
-        if self.anomaly_detection:
-            anomaly_scores = self.detect_anomalies_simple(corner_scores_array)
-            for i, (result, is_anomaly) in enumerate(zip(corner_results, anomaly_scores)):
-                result['is_anomalous'] = bool(is_anomaly)
+        # Compute overall score (mean of all corners)
+        overall_score = np.mean(corner_scores)
         
-        # Compute overall score
-        overall_score = np.mean(corner_scores_array)
-        
-        # Statistical analysis
-        worst_corner_idx = np.argmin(corner_scores_array)
-        best_corner_idx = np.argmax(corner_scores_array)
-        
-        # Confidence interval (95%)
-        confidence_interval = stats.t.interval(
-            0.95, 
-            len(corner_scores_array) - 1,
-            loc=overall_score,
-            scale=stats.sem(corner_scores_array)
-        )
-        
-        details = {
-            'overall_score': round(overall_score, 2),
-            'confidence_interval': [round(confidence_interval[0], 2), round(confidence_interval[1], 2)],
-            'corners': corner_results,
-            'worst_corner': corner_names[worst_corner_idx],
-            'worst_corner_score': round(corner_scores_array[worst_corner_idx], 2),
-            'best_corner': corner_names[best_corner_idx],
-            'best_corner_score': round(corner_scores_array[best_corner_idx], 2),
-            'score_std': round(np.std(corner_scores_array), 2),
-            'score_range': round(np.ptp(corner_scores_array), 2),
-            'grade': self._get_grade(overall_score),
-            'consistency': self._get_consistency_rating(np.std(corner_scores_array))
-        }
-        
-        return overall_score, details
-    
-    def _get_grade(self, score: float) -> str:
-        """Convert score to grade"""
-        if score >= 95:
-            return "Gem Mint (10)"
-        elif score >= 90:
-            return "Mint (9)"
-        elif score >= 85:
-            return "Near Mint-Mint (8.5)"
-        elif score >= 80:
-            return "Near Mint (8)"
-        elif score >= 75:
-            return "Excellent-Mint (7)"
-        elif score >= 70:
-            return "Excellent (6)"
-        elif score >= 60:
-            return "Good (5)"
-        elif score >= 50:
-            return "Fair (4)"
-        else:
-            return "Poor (1-3)"
-    
-    def _get_consistency_rating(self, std: float) -> str:
-        """Rate corner consistency"""
-        if std < 3:
-            return "Excellent - All corners similar"
-        elif std < 6:
-            return "Good - Minor variation"
-        elif std < 10:
-            return "Fair - Noticeable variation"
-        else:
-            return "Poor - Significant variation"
+        return round(overall_score, 2)
 
 
 # Convenience function
@@ -1111,7 +991,7 @@ def analyze_corners_advanced(
     image: np.ndarray,
     contour: np.ndarray,
     verbose: bool = False
-) -> Tuple[float, Dict]:
+) -> float:
     """
     Advanced corner analysis with comprehensive feature extraction
     
@@ -1121,7 +1001,7 @@ def analyze_corners_advanced(
         verbose: Print detailed analysis
         
     Returns:
-        Tuple of (overall_score, detailed_results)
+        Float score from 0-100 representing corner quality
     """
     analyzer = AdvancedCornerAnalyzer(
         use_deep_features=True,
@@ -1129,9 +1009,9 @@ def analyze_corners_advanced(
         multi_scale=True
     )
     
-    score, details = analyzer.analyze_corners(image, contour)
+    score = analyzer.analyze_corners(image, contour)
 
-    return score, details
+    return score
 
 
 
@@ -1139,7 +1019,7 @@ import numpy as np
 import cv2
 from scipy import ndimage
 from dataclasses import dataclass
-from typing import Dict, Tuple, List
+from typing import Dict, Tuple, List, Optional
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.patches import Rectangle, Circle
@@ -1173,7 +1053,7 @@ class AdvancedEdgeAnalyzer:
     def __init__(self, config: EdgeConfig = None):
         self.config = config or EdgeConfig()
     
-    def analyze_edges(self, image: np.ndarray, contour: np.ndarray) -> Tuple[float, Dict]:
+    def analyze_edges(self, image: np.ndarray, contour: np.ndarray) -> float:
         """
         Main analysis function - EDGES ONLY
         
@@ -1182,7 +1062,7 @@ class AdvancedEdgeAnalyzer:
             contour: Card contour from cv2.findContours
             
         Returns:
-            (average_score, details_dict)
+            Float score from 0-100 representing overall edge quality (mean of all edges)
         """
         # Normalize lighting first
         normalized_image = self._normalize_lighting(image)
@@ -1191,25 +1071,19 @@ class AdvancedEdgeAnalyzer:
         edge_samples = self._extract_edge_samples(normalized_image, contour)
         
         # Analyze each edge
-        edge_scores = {}
-        edge_metrics = {}
+        edge_scores = []
         
         for edge_name, samples in edge_samples.items():
             if samples is None or len(samples) == 0:
                 continue
                 
             score, metrics = self._analyze_edge_region(samples)
-            edge_scores[edge_name] = score
-            edge_metrics[edge_name] = metrics
+            edge_scores.append(score)
         
         # Compute average score (edges only)
-        average_score = np.mean(list(edge_scores.values())) if edge_scores else 0
+        average_score = np.mean(edge_scores) if edge_scores else 0
         
-        return round(average_score, 2), {
-            "edge_scores": edge_scores,
-            "average": round(average_score, 2),
-            "edge_metrics": edge_metrics
-        }
+        return round(average_score, 2)
     
     def _normalize_lighting(self, image: np.ndarray) -> np.ndarray:
         """Apply CLAHE to normalize lighting across the card"""
@@ -1341,319 +1215,14 @@ class AdvancedEdgeAnalyzer:
         return final_score, metrics
 
 
-# Visualization using Matplotlib
-
-def create_visualization(image: np.ndarray, contour: np.ndarray, 
-                        score: float, details: Dict) -> plt.Figure:
-    """
-    Create comprehensive edge visualization using matplotlib
-    
-    Args:
-        image: Original card image (BGR)
-        contour: Card contour
-        score: Overall edge score
-        details: Analysis details from analyze_edges()
-        
-    Returns:
-        matplotlib Figure
-    """
-    # Convert BGR to RGB for matplotlib
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    
-    # Create figure with grid layout
-    fig = plt.figure(figsize=(16, 10))
-    gs = GridSpec(4, 3, figure=fig, hspace=0.4, wspace=0.3)
-    
-    # Main image with edge annotations
-    ax_main = fig.add_subplot(gs[:, :2])
-    ax_main.imshow(image_rgb)
-    ax_main.axis('off')
-    ax_main.set_title('Edge Quality Analysis (Edges Only)', fontsize=16, fontweight='bold', pad=20)
-    
-    # Draw contour
-    contour_points = contour.squeeze()
-    if len(contour_points.shape) == 2:
-        ax_main.plot(np.append(contour_points[:, 0], contour_points[0, 0]),
-                    np.append(contour_points[:, 1], contour_points[0, 1]),
-                    'g-', linewidth=3, label='Card Boundary', alpha=0.7)
-    
-    # Get corners for edge positioning
-    rect = cv2.minAreaRect(contour)
-    box = cv2.boxPoints(rect)
-    box = box.astype(int)
-    
-    # Draw edge quality indicators at midpoints
-    h, w = image.shape[:2]
-    edge_positions = {
-        'top': (w // 2, 30),
-        'bottom': (w // 2, h - 30),
-        'left': (30, h // 2),
-        'right': (w - 30, h // 2)
-    }
-    
-    for edge_name, (ex, ey) in edge_positions.items():
-        if edge_name in details.get('edge_scores', {}):
-            edge_score_val = details['edge_scores'][edge_name]
-            color = _score_to_color(edge_score_val)
-            
-            # Larger circles for edge indicators
-            circle = Circle((ex, ey), 20, color=color, alpha=0.8, ec='black', linewidth=3)
-            ax_main.add_patch(circle)
-            
-            # Add edge label
-            label_offset = {'top': -35, 'bottom': 35, 'left': -35, 'right': 35}
-            ax_main.text(ex, ey + label_offset[edge_name], edge_name.upper(), 
-                        ha='center', fontsize=11, fontweight='bold',
-                        bbox=dict(boxstyle='round', facecolor='white', alpha=0.9, edgecolor='black'))
-    
-    # Overall Score Panel
-    ax_score = fig.add_subplot(gs[0, 2])
-    ax_score.axis('off')
-    
-    score_color = _score_to_color(score)
-    grade = _score_to_grade(score)
-    
-    ax_score.text(0.5, 0.7, 'OVERALL EDGE QUALITY', ha='center', fontsize=12, 
-                 fontweight='bold', transform=ax_score.transAxes)
-    ax_score.text(0.5, 0.4, f'{score:.1f}', ha='center', fontsize=40, 
-                 fontweight='bold', color=score_color, transform=ax_score.transAxes)
-    ax_score.text(0.5, 0.2, f'Est. Grade: {grade}', ha='center', fontsize=10,
-                 transform=ax_score.transAxes, style='italic')
-    
-    # Edge Scores Panel
-    ax_edges = fig.add_subplot(gs[1, 2])
-    ax_edges.axis('off')
-    ax_edges.text(0.5, 0.95, 'INDIVIDUAL EDGE SCORES', ha='center', fontsize=11, 
-                 fontweight='bold', transform=ax_edges.transAxes)
-    
-    y_pos = 0.75
-    for edge_name, edge_score_val in details.get('edge_scores', {}).items():
-        color = _score_to_color(edge_score_val)
-        
-        # Background bar
-        rect_bg = Rectangle((0.1, y_pos - 0.05), 0.5, 0.08, 
-                           facecolor='lightgray', transform=ax_edges.transAxes)
-        ax_edges.add_patch(rect_bg)
-        
-        # Score bar
-        rect_score = Rectangle((0.1, y_pos - 0.05), 0.5 * (edge_score_val / 100), 0.08,
-                              facecolor=color, transform=ax_edges.transAxes)
-        ax_edges.add_patch(rect_score)
-        
-        ax_edges.text(0.65, y_pos, f'{edge_name.capitalize()}: {edge_score_val:.1f}',
-                     va='center', fontsize=10, fontweight='bold', transform=ax_edges.transAxes)
-        y_pos -= 0.18
-    
-    # Detailed Metrics Panel
-    ax_metrics = fig.add_subplot(gs[2:, 2])
-    ax_metrics.axis('off')
-    ax_metrics.text(0.5, 0.95, 'EDGE QUALITY METRICS', ha='center', fontsize=11,
-                   fontweight='bold', transform=ax_metrics.transAxes)
-    
-    # Display metrics for each edge
-    y_pos = 0.85
-    for edge_name, metrics in details.get('edge_metrics', {}).items():
-        ax_metrics.text(0.1, y_pos, f'{edge_name.upper()} Edge:', 
-                       fontweight='bold', fontsize=10, transform=ax_metrics.transAxes)
-        y_pos -= 0.08
-        
-        metric_items = [
-            f"  • Smoothness: {metrics['smoothness_score']:.1f}/100",
-            f"  • Whitening: {metrics['whitening_score']:.1f}/100 ({metrics['light_whitening_ratio']*100:.1f}% affected)",
-            f"  • Continuity: {metrics['continuity_score']:.1f}/100 ({metrics['discontinuity']*100:.1f}% breaks)",
-            f"  • Texture Std: {metrics['texture_std']:.2f}"
-        ]
-        
-        for item in metric_items:
-            ax_metrics.text(0.1, y_pos, item, fontsize=8, 
-                           family='monospace', transform=ax_metrics.transAxes)
-            y_pos -= 0.06
-        
-        y_pos -= 0.04
-        
-        if y_pos < 0.1:
-            break
-    
-    plt.tight_layout()
-    return fig
-
-
-def create_heatmap(image: np.ndarray, contour: np.ndarray, 
-                   details: Dict, config: EdgeConfig = None) -> plt.Figure:
-    """
-    Create a heatmap overlay showing edge quality along the card edges
-    
-    Args:
-        image: Original card image (BGR)
-        contour: Card contour
-        details: Analysis details
-        config: EdgeConfig
-        
-    Returns:
-        matplotlib Figure with heatmap
-    """
-    if config is None:
-        config = EdgeConfig()
-    
-    # Convert BGR to RGB
-    image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-    
-    # Create overlay
-    overlay = np.zeros_like(image_rgb)
-    
-    # Get corners
-    rect = cv2.minAreaRect(contour)
-    box = cv2.boxPoints(rect)
-    box = box.astype(int)
-    
-    # Draw edge heatmaps with thicker lines
-    edge_thickness = 25
-    edge_names = ['top', 'right', 'bottom', 'left']
-    
-    for i in range(len(box)):
-        p1 = tuple(box[i])
-        p2 = tuple(box[(i + 1) % len(box)])
-        edge_name = edge_names[i]
-        
-        if edge_name in details.get('edge_scores', {}):
-            edge_score = details['edge_scores'][edge_name]
-            color_rgb = _score_to_color_rgb(edge_score)
-            cv2.line(overlay, p1, p2, color_rgb, edge_thickness)
-    
-    # Blend
-    alpha = 0.5
-    blended = cv2.addWeighted(image_rgb, 1 - alpha, overlay, alpha, 0)
-    
-    # Create figure
-    fig, ax = plt.subplots(figsize=(12, 8))
-    ax.imshow(blended)
-    ax.axis('off')
-    ax.set_title('Edge Quality Heatmap', fontsize=16, fontweight='bold', pad=20)
-    
-    # Add legend
-    legend_elements = [
-        mpatches.Patch(color=_score_to_color(95), label='Excellent (90-100)'),
-        mpatches.Patch(color=_score_to_color(85), label='Mint (80-90)'),
-        mpatches.Patch(color=_score_to_color(75), label='Near Mint (70-80)'),
-        mpatches.Patch(color=_score_to_color(65), label='Good (60-70)'),
-        mpatches.Patch(color=_score_to_color(45), label='Poor (<60)')
-    ]
-    ax.legend(handles=legend_elements, loc='upper right', framealpha=0.95, fontsize=11)
-    
-    plt.tight_layout()
-    return fig
-
-
-def create_edge_profile_chart(details: Dict) -> plt.Figure:
-    """
-    Create a radar/polar chart showing edge quality profile
-    
-    Args:
-        details: Analysis details from analyze_edges()
-        
-    Returns:
-        matplotlib Figure with polar chart
-    """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6), 
-                                    subplot_kw=dict(projection='polar'))
-    
-    # Get edge scores
-    edge_names = ['top', 'right', 'bottom', 'left']
-    scores = [details['edge_scores'].get(name, 0) for name in edge_names]
-    
-    # Add first value to close the circle
-    scores_closed = scores + [scores[0]]
-    angles = np.linspace(0, 2 * np.pi, len(edge_names), endpoint=False).tolist()
-    angles_closed = angles + [angles[0]]
-    
-    # Plot 1: Overall edge scores
-    ax1.plot(angles_closed, scores_closed, 'o-', linewidth=3, color='#2E86AB', markersize=10)
-    ax1.fill(angles_closed, scores_closed, alpha=0.25, color='#2E86AB')
-    ax1.set_ylim(0, 100)
-    ax1.set_xticks(angles)
-    ax1.set_xticklabels([name.upper() for name in edge_names], fontsize=11, fontweight='bold')
-    ax1.set_yticks([25, 50, 75, 100])
-    ax1.set_yticklabels(['25', '50', '75', '100'])
-    ax1.set_title('Edge Scores Profile', fontsize=13, fontweight='bold', pad=20)
-    ax1.grid(True, linestyle='--', alpha=0.7)
-    
-    # Plot 2: Component scores (smoothness, whitening, continuity)
-    if edge_names[0] in details.get('edge_metrics', {}):
-        metrics = details['edge_metrics'][edge_names[0]]  # Use top edge as example
-        component_names = ['Smoothness', 'Whitening', 'Continuity']
-        component_scores = [
-            metrics['smoothness_score'],
-            metrics['whitening_score'],
-            metrics['continuity_score']
-        ]
-        component_scores_closed = component_scores + [component_scores[0]]
-        angles_comp = np.linspace(0, 2 * np.pi, len(component_names), endpoint=False).tolist()
-        angles_comp_closed = angles_comp + [angles_comp[0]]
-        
-        ax2.plot(angles_comp_closed, component_scores_closed, 'o-', 
-                linewidth=3, color='#A23B72', markersize=10)
-        ax2.fill(angles_comp_closed, component_scores_closed, alpha=0.25, color='#A23B72')
-        ax2.set_ylim(0, 100)
-        ax2.set_xticks(angles_comp)
-        ax2.set_xticklabels(component_names, fontsize=11, fontweight='bold')
-        ax2.set_yticks([25, 50, 75, 100])
-        ax2.set_yticklabels(['25', '50', '75', '100'])
-        ax2.set_title('Quality Components (Top Edge)', fontsize=13, fontweight='bold', pad=20)
-        ax2.grid(True, linestyle='--', alpha=0.7)
-    
-    plt.tight_layout()
-    return fig
-
-
-def _score_to_color(score: float) -> str:
-    """Convert score to hex color for matplotlib"""
-    if score >= 90:
-        return '#00C800'  # Green
-    elif score >= 80:
-        return '#64DC64'  # Light green
-    elif score >= 70:
-        return '#C8FFC8'  # Yellow-green
-    elif score >= 60:
-        return '#FFFF00'  # Yellow
-    elif score >= 50:
-        return '#FFB400'  # Orange
-    else:
-        return '#FF0000'  # Red
-
-
-def _score_to_color_rgb(score: float) -> Tuple[int, int, int]:
-    """Convert score to RGB tuple (for cv2)"""
-    hex_color = _score_to_color(score)
-    # Convert hex to RGB
-    r = int(hex_color[1:3], 16)
-    g = int(hex_color[3:5], 16)
-    b = int(hex_color[5:7], 16)
-    return (r, g, b)
-
-
-def _score_to_grade(score: float) -> str:
-    """Estimate PSA-style grade from edge score"""
-    if score >= 95:
-        return "PSA 10 (Gem Mint)"
-    elif score >= 90:
-        return "PSA 9 (Mint)"
-    elif score >= 85:
-        return "PSA 8 (NM-MT)"
-    elif score >= 75:
-        return "PSA 7 (NM)"
-    elif score >= 65:
-        return "PSA 6 (EX-MT)"
-    else:
-        return "PSA 5 or lower"
-
-
-
-import cv2
 import numpy as np
-import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+import cv2
+from typing import Tuple, Dict, List, Optional
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict
+from scipy import ndimage, stats
+from scipy.signal import convolve2d
+import warnings
+warnings.filterwarnings('ignore')
 
 
 @dataclass
@@ -1911,12 +1480,12 @@ class SurfaceAnalyzer:
             edge_sharpness=edge_sharpness
         )
     
-    def compute_quality_score(self, metrics: SurfaceMetrics) -> Dict[str, float]:
+    def compute_quality_score(self, metrics: SurfaceMetrics) -> float:
         """
-        Convert metrics to normalized quality scores (0-100).
+        Convert metrics to normalized quality score (0-100).
         
         Returns:
-            Dictionary with component scores and final grade
+            Final quality score
         """
         # Normalize against calibration data
         scratch_score = 100 * np.exp(-0.5 * (
@@ -1946,240 +1515,23 @@ class SurfaceAnalyzer:
             0.10 * edge_score
         )
         
-        return {
-            'scratch_score': round(scratch_score, 2),
-            'wear_score': round(wear_score, 2),
-            'defect_score': round(defect_score, 2),
-            'texture_score': round(texture_score, 2),
-            'edge_score': round(edge_score, 2),
-            'final_score': round(final_score, 2)
-        }
+        return round(final_score, 2)
     
-    def grade(self, image: np.ndarray, contour: np.ndarray) -> Optional[Dict]:
+    def grade(self, image: np.ndarray, contour: np.ndarray) -> Optional[float]:
         """
         Complete grading pipeline.
         
         Returns:
-            Dictionary with metrics and scores, or None if analysis fails
+            Float score from 0-100 or None if analysis fails
         """
         metrics = self.analyze(image, contour)
         if metrics is None:
             return None
         
-        scores = self.compute_quality_score(metrics)
+        score = self.compute_quality_score(metrics)
         
-        return {
-            'metrics': metrics.to_dict(),
-            'scores': scores
-        }
-    
-    def visualize_analysis(self, image: np.ndarray, contour: np.ndarray, 
-                          result: Dict, save_path: Optional[str] = None,
-                          dpi: int = 150):
-        """
-        Create comprehensive visualization of surface analysis results.
-        
-        Args:
-            image: Original image
-            contour: Surface contour
-            result: Result from grade() method
-            save_path: Optional path to save figure
-            dpi: Resolution for saved figure
-        """
-        if result is None:
-            print("No valid result to visualize")
-            return
-        
-        # Extract ROI for detailed views
-        roi, is_valid = self.extract_roi(image, contour)
-        if not is_valid:
-            print("Invalid ROI")
-            return
-        
-        gray = self.preprocess(roi)
-        
-        # Create figure with subplots
-        fig = plt.figure(figsize=(16, 10))
-        gs = fig.add_gridspec(3, 4, hspace=0.35, wspace=0.3)
-        
-        # ============================================================
-        # Row 1: Original image and ROI
-        # ============================================================
-        
-        # Original image with contour overlay
-        ax1 = fig.add_subplot(gs[0, 0:2])
-        img_display = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-        ax1.imshow(img_display)
-        ax1.plot(contour[:, 0, 0], contour[:, 0, 1], 'r-', linewidth=2, label='Contour')
-        
-        # Draw bounding box
-        x, y, w, h = cv2.boundingRect(contour)
-        rect = Rectangle((x, y), w, h, linewidth=2, edgecolor='lime', 
-                        facecolor='none', linestyle='--', label='ROI')
-        ax1.add_patch(rect)
-        
-        ax1.set_title('Original Image with Detection', fontsize=12, fontweight='bold')
-        ax1.axis('off')
-        ax1.legend(loc='upper right')
-        
-        # Extracted ROI
-        ax2 = fig.add_subplot(gs[0, 2:4])
-        ax2.imshow(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
-        ax2.set_title('Extracted ROI (Preprocessed)', fontsize=12, fontweight='bold')
-        ax2.axis('off')
-        
-        # ============================================================
-        # Row 2: Feature Detection Visualizations
-        # ============================================================
-        
-        # Scratch detection
-        ax3 = fig.add_subplot(gs[1, 0])
-        edges = cv2.Canny(gray, 30, 90)
-        lines = cv2.HoughLinesP(edges, 1, np.pi/180, 30, minLineLength=15, maxLineGap=3)
-        
-        scratch_vis = cv2.cvtColor(gray, cv2.COLOR_GRAY2RGB)
-        if lines is not None:
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                cv2.line(scratch_vis, (x1, y1), (x2, y2), (255, 0, 0), 2)
-        
-        ax3.imshow(scratch_vis)
-        ax3.set_title(f'Scratches Detected\nDensity: {result["metrics"]["scratch_density"]:.2f}', 
-                     fontsize=10, fontweight='bold')
-        ax3.axis('off')
-        
-        # Wear analysis (high-frequency component)
-        ax4 = fig.add_subplot(gs[1, 1])
-        blurred = cv2.GaussianBlur(gray, (15, 15), 0)
-        high_freq = cv2.absdiff(gray, blurred)
-        ax4.imshow(high_freq, cmap='hot')
-        ax4.set_title(f'Wear Pattern\nIntensity: {result["metrics"]["wear_intensity"]:.2f}', 
-                     fontsize=10, fontweight='bold')
-        ax4.axis('off')
-        
-        # Defect detection
-        ax5 = fig.add_subplot(gs[1, 2])
-        binary = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-                                       cv2.THRESH_BINARY_INV, 11, 2)
-        kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-        binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel)
-        binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, kernel)
-        
-        ax5.imshow(binary, cmap='gray')
-        ax5.set_title(f'Defect Map\nCount: {result["metrics"]["defect_count"]}', 
-                     fontsize=10, fontweight='bold')
-        ax5.axis('off')
-        
-        # Edge sharpness visualization
-        ax6 = fig.add_subplot(gs[1, 3])
-        laplacian = cv2.Laplacian(gray, cv2.CV_64F)
-        ax6.imshow(np.abs(laplacian), cmap='viridis')
-        ax6.set_title(f'Edge Sharpness\nScore: {result["metrics"]["edge_sharpness"]:.1f}', 
-                     fontsize=10, fontweight='bold')
-        ax6.axis('off')
-        
-        # ============================================================
-        # Row 3: Scores and Metrics
-        # ============================================================
-        
-        # Score breakdown (bar chart)
-        ax7 = fig.add_subplot(gs[2, 0:2])
-        scores = result['scores']
-        score_names = ['Scratch', 'Wear', 'Defect', 'Texture', 'Edge']
-        score_values = [
-            scores['scratch_score'],
-            scores['wear_score'],
-            scores['defect_score'],
-            scores['texture_score'],
-            scores['edge_score']
-        ]
-        
-        colors = ['#2ecc71' if s >= 80 else '#f39c12' if s >= 60 else '#e74c3c' 
-                 for s in score_values]
-        
-        bars = ax7.barh(score_names, score_values, color=colors, edgecolor='black', linewidth=1.5)
-        ax7.set_xlim(0, 100)
-        ax7.set_xlabel('Score', fontsize=11, fontweight='bold')
-        ax7.set_title('Component Scores Breakdown', fontsize=12, fontweight='bold')
-        ax7.grid(axis='x', alpha=0.3, linestyle='--')
-        
-        # Add value labels on bars
-        for i, (bar, val) in enumerate(zip(bars, score_values)):
-            ax7.text(val + 2, i, f'{val:.1f}', va='center', fontsize=10, fontweight='bold')
-        
-        # Final score gauge
-        ax8 = fig.add_subplot(gs[2, 2:4])
-        final_score = scores['final_score']
-        
-        # Determine grade
-        if final_score >= 90:
-            grade = 'MINT'
-            grade_color = '#2ecc71'
-        elif final_score >= 80:
-            grade = 'EXCELLENT'
-            grade_color = '#27ae60'
-        elif final_score >= 70:
-            grade = 'GOOD'
-            grade_color = '#f39c12'
-        elif final_score >= 60:
-            grade = 'FAIR'
-            grade_color = '#e67e22'
-        else:
-            grade = 'POOR'
-            grade_color = '#e74c3c'
-        
-        # Draw gauge
-        theta = np.linspace(0, np.pi, 100)
-        r = 1
-        x = r * np.cos(theta)
-        y = r * np.sin(theta)
-        
-        ax8.plot(x, y, 'k-', linewidth=3)
-        ax8.fill_between(x, 0, y, where=(x <= np.cos(np.pi * (1 - final_score/100))), 
-                        color=grade_color, alpha=0.7)
-        
-        # Needle
-        angle = np.pi * (1 - final_score/100)
-        ax8.plot([0, np.cos(angle) * 0.9], [0, np.sin(angle) * 0.9], 
-                'r-', linewidth=4, marker='o', markersize=10)
-        
-        # Score text
-        ax8.text(0, -0.3, f'{final_score:.1f}', ha='center', va='center', 
-                fontsize=36, fontweight='bold', color=grade_color)
-        ax8.text(0, -0.5, grade, ha='center', va='center', 
-                fontsize=24, fontweight='bold', color=grade_color)
-        
-        ax8.set_xlim(-1.2, 1.2)
-        ax8.set_ylim(-0.7, 1.2)
-        ax8.set_aspect('equal')
-        ax8.axis('off')
-        ax8.set_title('Overall Quality Score', fontsize=12, fontweight='bold')
-        
-        # Add metrics table
-        metrics_text = (
-            f"Detailed Metrics:\n"
-            f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Texture Entropy: {result['metrics']['texture_entropy']:.2f}\n"
-            f"Gloss Variation: {result['metrics']['gloss_variation']:.3f}\n"
-            f"Defect Area: {result['metrics']['defect_area_ratio']*100:.3f}%\n"
-            f"Wear Uniformity: {result['metrics']['wear_uniformity']:.3f}"
-        )
-        
-        ax8.text(0, -0.85, metrics_text, ha='center', va='top', 
-                fontsize=9, family='monospace', 
-                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.3))
-        
-        # Overall title
-        fig.suptitle('Surface Quality Analysis Report', 
-                    fontsize=16, fontweight='bold', y=0.98)
-        
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(save_path, dpi=dpi, bbox_inches='tight')
-            print(f"Visualization saved to {save_path}")
-        
-        plt.show()
+        return score
+
 
 import streamlit as st
 import cv2
@@ -2259,23 +1611,27 @@ def get_score_color(score):
 def get_grade_text(score):
     """Convert score to grade text"""
     if score >= 95:
-        return "Gem Mint (10)"
+        return "10"
     elif score >= 90:
-        return "Mint (9)"
-    elif score >= 85:
-        return "Near Mint-Mint (8.5)"
+        return "9"
     elif score >= 80:
-        return "Near Mint (8)"
-    elif score >= 75:
-        return "Excellent-Mint (7)"
+        return "8"
     elif score >= 70:
-        return "Excellent (6)"
+        return "7"
     elif score >= 60:
-        return "Good (5)"
+        return "6"
     elif score >= 50:
-        return "Fair (4)"
+        return "5"
+    elif score >= 50:
+        return "4"
+    elif score >= 40:
+        return "4"
+    elif score >= 30:
+        return "4"
+    elif score >= 20:
+        return "2"
     else:
-        return "Poor (1-3)"
+        return "1"
 
 # Main app
 def main():
@@ -2287,6 +1643,8 @@ def main():
     - **Corners**: Wear, whitening, and damage detection
     - **Edges**: Surface quality and wear patterns
     - **Surface**: Scratches, defects, and overall condition
+    
+    **Final Score**: Equal mean of all component scores (0-100 scale)
     """)
     
     # Sidebar
@@ -2301,12 +1659,6 @@ def main():
         
         st.divider()
         
-        st.subheader("Visualization Options")
-        show_visualizations =True
-        show_metrics = False
-        
-        st.divider()
-        
         st.subheader("About")
         st.info("""
         This system uses advanced computer vision techniques including:
@@ -2314,6 +1666,9 @@ def main():
         - Gradient analysis
         - Multi-scale feature extraction
         - Statistical modeling
+        
+        **Scoring**: Each component returns a score from 0-100. 
+        The final score is the mean of all enabled components.
         """)
     
     # File uploader
@@ -2325,170 +1680,181 @@ def main():
     
     if uploaded_file is not None:
         # Load image
-            image = load_image(uploaded_file)
-            
-            # Display original image
-            col1, col2 = st.columns([1, 1])
-            
-            with col1:
-                st.subheader("📸 Original Image")
-                display_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-                st.image(display_image, width='stretch')
-            
-            # Detect card contour
-            with st.spinner("🔍 Detecting card boundaries..."):
-                try:
-
-                    detector = AdvancedCardDetector()
-                    contour, debug_info = detector.detect_card_contour(image, debug=True)
+        image = load_image(uploaded_file)
+        
+        # Display original image
+        col1, col2 = st.columns([1, 1])
+        
+        with col1:
+            st.subheader("📸 Original Image")
+            display_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+            st.image(display_image, use_column_width=True)
+        
+        # Detect card contour
+        with st.spinner("🔍 Detecting card boundaries..."):
+            try:
+                detector = AdvancedCardDetector()
+                contour, debug_info = detector.detect_card_contour(image, debug=True)
+                
+                # Draw contour on image
+                contour_image = image.copy()
+                cv2.drawContours(contour_image, [contour], -1, (0, 255, 0), 3)
+                
+                with col2:
+                    st.subheader("✅ Card Detected")
+                    display_contour = cv2.cvtColor(contour_image, cv2.COLOR_BGR2RGB)
+                    st.image(display_contour, use_column_width=True)
                     
-                    # Draw contour on image
-                    contour_image = image.copy()
-                    cv2.drawContours(contour_image, [contour], -1, (0, 255, 0), 3)
+                    if debug_info:
+                        with st.expander("Detection Details"):
+                            st.write(f"**Confidence**: {debug_info['confidence']:.2%}")
+                            st.write(f"**Area**: {debug_info['area']:.0f} pixels")
+                            st.write(f"**Aspect Ratio**: {debug_info['aspect_ratio']:.2f}")
+                
+            except Exception as e:
+                st.error(f"❌ Could not detect card: {str(e)}")
+                st.info("Please ensure the card is clearly visible and takes up most of the image.")
+                return
+        
+        st.divider()
+        
+        # Analysis sections
+        scores = []
+        
+        # Centering Analysis
+        if run_centering:
+            st.header("🎯 Centering Analysis")
+            
+            with st.spinner("Analyzing centering..."):
+                try:
+                    centering_score = analyze_card_centering(image, contour)
+                    scores.append(centering_score)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.metric(
+                            "Centering Score",
+                            f"{centering_score:.1f}/100",
+                            help="Mean of left/right and top/bottom centering ratios"
+                        )
                     
                     with col2:
-                        st.subheader("✅ Card Detected")
-                        display_contour = cv2.cvtColor(contour_image, cv2.COLOR_BGR2RGB)
-                        st.image(display_contour, width='stretch')
-                        
-                        if debug_info:
-                            with st.expander("Detection Details"):
-                                st.write(f"**Confidence**: {debug_info['confidence']:.2%}")
-                                st.write(f"**Area**: {debug_info['area']:.0f} pixels")
-                                st.write(f"**Aspect Ratio**: {debug_info['aspect_ratio']:.2f}")
+                        st.markdown(f"**Grade**: {get_grade_text(centering_score)}")
                     
                 except Exception as e:
-                    st.error(f"❌ Could not detect card: {str(e)}")
-                    st.info("Please ensure the card is clearly visible and takes up most of the image.")
-                    return
+                    st.error(f"Centering analysis failed: {str(e)}")
+        
+        # Corner Analysis
+        if run_corners:
+            st.header("📐 Corner Analysis")
             
-            st.divider()
-            
-            # Analysis sections
-            results = {}
-            
-            # Centering Analysis
-            # Centering Analysis
-            if run_centering:
-                    st.header("🎯 Centering Analysis")
-
-                    with st.spinner("Analyzing centering..."):
-                                        centering_score, centering_details = analyze_card_centering(image, contour)
-                                        results["centering"] = centering_score
-                                        col1, col2, col3 = st.columns(3)
-                                        print("centering_score: ",centering_score)
-                                        st.info("Overall Score")
+            with st.spinner("Analyzing corners..."):
+                try:
+                    corner_score = analyze_corners_advanced(image, contour)
+                    scores.append(corner_score)
                     
-                                        with col1:
-                                           st.metric(
-                                           "Overall Score",
-                                           f"{centering_score:.1f}/100"
-                                           )
-
-                                        with col2:
-                                                            st.metric(
-                                                            "L/R Ratio",
-                                                            f"{centering_details.get('lr_ratio', 0):.1f}%"
-                                                            )
-
-                                        with col3:
-                                                            st.metric(
-                                                            "T/B Ratio",
-                                                            f"{centering_details.get('tb_ratio', 0):.1f}%"
-                                                            )
-                                        if show_metrics:
-                                                            with st.expander("Detailed Centering Metrics"):
-                                                                  st.json(centering_details)
-
-
-  
-            # Corner Analysis
-            if run_corners:
-                st.header("📐 Corner Analysis")
-                
-                with st.spinner("Analyzing corners..."):
-                    try:
-                        corner_score, corner_details = analyze_corners_advanced(image, contour)
-                        results['corners'] = corner_score
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.metric(
+                            "Corner Score",
+                            f"{corner_score:.1f}/100",
+                            help="Mean quality score of all four corners"
+                        )
+                    
+                    with col2:
+                        st.markdown(f"**Grade**: {get_grade_text(corner_score)}")
+                    
+                except Exception as e:
+                    st.error(f"Corner analysis failed: {str(e)}")
+        
+        # Edge Analysis
+        if run_edges:
+            st.header("📏 Edge Analysis")
+            
+            with st.spinner("Analyzing edges..."):
+                try:
+                    edge_analyzer = AdvancedEdgeAnalyzer()
+                    edge_score = edge_analyzer.analyze_edges(image, contour)
+                    scores.append(edge_score)
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.metric(
+                            "Edge Score",
+                            f"{edge_score:.1f}/100",
+                            help="Mean quality score of all four edges"
+                        )
+                    
+                    with col2:
+                        st.markdown(f"**Grade**: {get_grade_text(edge_score)}")
+                    
+                except Exception as e:
+                    st.error(f"Edge analysis failed: {str(e)}")
+        
+        # Surface Analysis
+        if run_surface:
+            st.header("🔬 Surface Analysis")
+            
+            with st.spinner("Analyzing surface quality..."):
+                try:
+                    surface_analyzer = SurfaceAnalyzer()
+                    surface_score = surface_analyzer.grade(image, contour)
+                    
+                    if surface_score is not None:
+                        scores.append(surface_score)
                         
-                        col1, col2, col3 = st.columns(3)
+                        col1, col2 = st.columns(2)
                         
                         with col1:
                             st.metric(
-                                "Overall Score",
-                                f"{corner_score:.1f}/100"
+                                "Surface Score",
+                                f"{surface_score:.1f}/100",
+                                help="Overall surface quality based on scratches, wear, and defects"
                             )
                         
-                    
-
-                        # Individual corner scores
-                        st.subheader("Individual Corner Scores")
-                        cols = st.columns(4)
+                        with col2:
+                            st.markdown(f"**Grade**: {get_grade_text(surface_score)}")
+                    else:
+                        st.warning("Surface analysis could not be completed")
                         
-                        for idx, corner_data in enumerate(corner_details['corners']):
-                            with cols[idx]:
-                                score = corner_data['score']
-                                st.markdown(f"**{corner_data['name']}**")
-                                st.markdown(f"<p class='{get_score_color(score)}'>{score:.1f}/100</p>", 
-                                          unsafe_allow_html=True)
-                        
-                        if show_visualizations:
-                            st.subheader("Corner Visualization")
+                except Exception as e:
+                    st.error(f"Surface analysis failed: {str(e)}")
+        
+        # Final Score
+        if scores:
+            st.divider()
+            st.header("🏆 FINAL GRADE")
             
-                        if show_metrics:
-                            with st.expander("Detailed Corner Metrics"):
-                                st.json(corner_details)
-                        
-                    except Exception as e:
-                        st.error(f"Corner analysis failed: {str(e)}")
+            final_score = np.mean(scores)
             
-            # Edge Analysis
-            if run_edges:
-                st.header("📏 Edge Analysis")
-                with st.spinner("Analyzing edges..."):
-                        edge_analyzer = AdvancedEdgeAnalyzer()
-                        edge_score, edge_details = edge_analyzer.analyze_edges(image, contour)
-                        print('==================')
-                        print( edge_score, edge_details)
-                        results['edges'] = edge_score
-                        
-                        col1, col2, col3, col4 = st.columns(4)
-                        print("edge_score: ",edge_score)
-                        st.info("Overall Score")
-                        st.info(f"{edge_score:.1f}/100")
-                        with col1:
-                                        st.metric(
-                                        "Overall Score",
-                                        f"{edge_score:.1f}/100"
-                                        )
-            # Surface Analysis
-            if run_surface:
-                st.header("🔬 Surface Analysis")
+            col1, col2, col3 = st.columns([1, 2, 1])
+            
+            with col2:
+                st.markdown(f"<h1 style='text-align: center; color: {'' if final_score >= 90 else '#f39c12' if final_score >= 70 else '#e74c3c'};'>{final_score:.1f}/100</h1>", unsafe_allow_html=True)
+                st.markdown(f"<h3 style='text-align: center;'>{get_grade_text(final_score)}</h3>", unsafe_allow_html=True)
+            
+            # Show component breakdown
+            with st.expander("📊 Score Breakdown"):
+                component_names = []
+                if run_centering and len(scores) > 0:
+                    component_names.append("Centering")
+                if run_corners and len(scores) > (1 if run_centering else 0):
+                    component_names.append("Corners")
+                if run_edges and len(scores) > ((1 if run_centering else 0) + (1 if run_corners else 0)):
+                    component_names.append("Edges")
+                if run_surface and len(scores) > ((1 if run_centering else 0) + (1 if run_corners else 0) + (1 if run_edges else 0)):
+                    component_names.append("Surface")
                 
-                with st.spinner("Analyzing surface quality..."):
-                        surface_analyzer = SurfaceAnalyzer()
-                        surface_result = surface_analyzer.grade(image, contour)
-                        
-                        if surface_result:
-                            surface_score = surface_result['scores']['final_score']
-                            results['surface'] = surface_score
-                            
-                            col21, col22, col23, col24 = st.columns(4)
-                            
-                            with col21:
-                                st.metric(
-                                    "Overall Score",
-                                    f"{surface_score:.1f}/100"
-                             )
-                            
-                    
-
+                for name, score in zip(component_names, scores):
+                    st.write(f"**{name}**: {score:.1f}/100")
+                
+                st.write(f"**Mean**: {final_score:.1f}/100")
     
     else:
         st.info("👆 Please upload a trading card image to begin analysis")
 
 if __name__ == "__main__":
     main()
-
-
-
