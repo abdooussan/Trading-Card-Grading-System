@@ -3,6 +3,165 @@ import numpy as np
 from dataclasses import dataclass
 from typing import Tuple, Dict
 import os
+from typing import Tuple, Dict, Optional
+
+class AdvancedCardDetector:
+    def __init__(self):
+        self.min_card_area_ratio = 0.3  # Card should be at least 30% of image
+        self.max_card_area_ratio = 0.95  # Card should be at most 95% of image
+        self.aspect_ratio_range = (1.3, 1.8)  # Typical card aspect ratios (credit card ~1.586)
+        
+    def detect_card_contour(self, image: np.ndarray, debug: bool = False) -> Tuple[np.ndarray, Optional[Dict]]:
+        """
+        Detect the card contour in an image.
+        
+        Args:
+            image: Input image (BGR format)
+            debug: If True, return debug information
+            
+        Returns:
+            Tuple of (contour, debug_info)
+        """
+        # Convert to grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Apply Gaussian blur to reduce noise
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        # Edge detection using Canny
+        edges = cv2.Canny(blurred, 50, 150)
+        
+        # Dilate edges to close gaps
+        kernel = np.ones((3, 3), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=2)
+        
+        # Find contours
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Get image dimensions
+        image_area = image.shape[0] * image.shape[1]
+        
+        # Filter and rank contours
+        best_contour = None
+        best_score = 0
+        debug_info = None
+        
+        for contour in contours:
+            # Approximate contour to polygon
+            epsilon = 0.02 * cv2.arcLength(contour, True)
+            approx = cv2.approxPolyDP(contour, epsilon, True)
+            
+            # Card should have 4 corners
+            if len(approx) == 4:
+                area = cv2.contourArea(approx)
+                area_ratio = area / image_area
+                
+                # Check if area is within acceptable range
+                if self.min_card_area_ratio <= area_ratio <= self.max_card_area_ratio:
+                    # Calculate aspect ratio
+                    rect = cv2.minAreaRect(approx)
+                    width, height = rect[1]
+                    
+                    if width > 0 and height > 0:
+                        aspect_ratio = max(width, height) / min(width, height)
+                        
+                        # Check aspect ratio
+                        if self.aspect_ratio_range[0] <= aspect_ratio <= self.aspect_ratio_range[1]:
+                            # Calculate confidence score
+                            confidence = area_ratio * (1 - abs(aspect_ratio - 1.586) / 1.586)
+                            
+                            if confidence > best_score:
+                                best_score = confidence
+                                best_contour = approx
+                                
+                                if debug:
+                                    debug_info = {
+                                        'confidence': confidence,
+                                        'area': area,
+                                        'area_ratio': area_ratio,
+                                        'aspect_ratio': aspect_ratio,
+                                        'corners': len(approx)
+                                    }
+        
+        # If no good 4-corner contour found, use largest contour
+        if best_contour is None and len(contours) > 0:
+            best_contour = max(contours, key=cv2.contourArea)
+            
+            if debug:
+                area = cv2.contourArea(best_contour)
+                debug_info = {
+                    'confidence': 0.5,
+                    'area': area,
+                    'area_ratio': area / image_area,
+                    'aspect_ratio': 0,
+                    'corners': len(best_contour)
+                }
+        
+        return best_contour, debug_info
+    
+    def extract_card(self, image: np.ndarray, contour: np.ndarray) -> np.ndarray:
+        """
+        Extract and crop the card from the image based on contour.
+        
+        Args:
+            image: Input image
+            contour: Card contour
+            
+        Returns:
+            Cropped and perspective-corrected card image
+        """
+        # Get bounding rectangle
+        rect = cv2.minAreaRect(contour)
+        box = cv2.boxPoints(rect)
+        box = np.int0(box)
+        
+        # Order points: top-left, top-right, bottom-right, bottom-left
+        box = self._order_points(box)
+        
+        # Calculate dimensions
+        width = int(max(
+            np.linalg.norm(box[0] - box[1]),
+            np.linalg.norm(box[2] - box[3])
+        ))
+        height = int(max(
+            np.linalg.norm(box[0] - box[3]),
+            np.linalg.norm(box[1] - box[2])
+        ))
+        
+        # Destination points for perspective transform
+        dst_points = np.array([
+            [0, 0],
+            [width - 1, 0],
+            [width - 1, height - 1],
+            [0, height - 1]
+        ], dtype=np.float32)
+        
+        # Get perspective transform matrix
+        matrix = cv2.getPerspectiveTransform(box.astype(np.float32), dst_points)
+        
+        # Apply perspective transform
+        warped = cv2.warpPerspective(image, matrix, (width, height))
+        
+        return warped
+    
+    def _order_points(self, pts: np.ndarray) -> np.ndarray:
+        """
+        Order points in clockwise order starting from top-left.
+        """
+        # Sort by y-coordinate
+        sorted_pts = pts[np.argsort(pts[:, 1])]
+        
+        # Top two points
+        top = sorted_pts[:2]
+        top = top[np.argsort(top[:, 0])]
+        
+        # Bottom two points
+        bottom = sorted_pts[2:]
+        bottom = bottom[np.argsort(bottom[:, 0])]
+        
+        return np.array([top[0], top[1], bottom[1], bottom[0]], dtype=np.float32)
+
+
 
 def preprocess_image( image: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
         """Preprocess the image for analysis"""
@@ -35,7 +194,7 @@ class CardCandidate:
     rectangularity: float  # How close to a perfect rectangle
     score: float  # Overall quality score
 
-class AdvancedCardDetector:
+class AdvancedCardDetector2:
     """Advanced card detection with multiple strategies and validation"""
     
     def __init__(
@@ -242,17 +401,18 @@ class AdvancedCardDetector:
         """
         # Get multiple preprocessed versions
         # Get multiple preprocessed versions
-        thresh_images = self.preprocess_advanced(image)
-
+        #gray , thresh_images = self.preprocess_advanced(image)
+        _ , thresh   =preprocess_image(image)
         all_candidates = []
-
         # Extract candidates from each preprocessing strategy
-        for thresh in thresh_images:
-                    candidates = self.extract_card_candidates(image, thresh)
-                    all_candidates.extend(candidates)
-
+        #for thresh in thresh_images:
+        #            candidates = self.extract_card_candidates(image, thresh)
+        #            all_candidates.extend(candidates)
+        candidates = self.extract_card_candidates(image, thresh)
+        all_candidates.extend(candidates)
         # If no candidates found, use the entire image as the card
         if not all_candidates:
+                    print("==================")
                     h, w = image.shape[:2]
                     # Create a contour representing the entire image
                     entire_image_contour = np.array([
@@ -428,12 +588,8 @@ def analyze_card_centering(image: np.ndarray, contour: np.ndarray) -> float:
 
 
 
-import numpy as np
-import cv2
 from typing import Tuple, Dict, List, Optional
 from dataclasses import dataclass
-from scipy import ndimage, stats
-from scipy.signal import convolve2d
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -1681,21 +1837,20 @@ def main():
     if uploaded_file is not None:
         # Load image
         image = load_image(uploaded_file)
-        
+        # Detect card contour
         # Display original image
         col1, col2 = st.columns([1, 1])
-        
+                
         with col1:
-            st.subheader("📸 Original Image")
-            display_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
-            st.image(display_image, use_column_width=True)
-        
-        # Detect card contour
+                    st.subheader("📸 Original Image")
+                    display_image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+                    st.image(display_image, use_column_width=True)
         with st.spinner("🔍 Detecting card boundaries..."):
             try:
+                # Your existing code works with this class
                 detector = AdvancedCardDetector()
                 contour, debug_info = detector.detect_card_contour(image, debug=True)
-                
+
                 # Draw contour on image
                 contour_image = image.copy()
                 cv2.drawContours(contour_image, [contour], -1, (0, 255, 0), 3)
@@ -1709,11 +1864,12 @@ def main():
                         with st.expander("Detection Details"):
                             st.write(f"**Confidence**: {debug_info['confidence']:.2%}")
                             st.write(f"**Area**: {debug_info['area']:.0f} pixels")
-                            st.write(f"**Aspect Ratio**: {debug_info['aspect_ratio']:.2f}")
-                
+                            st.write(f"**Aspect Ratio**: {debug_info.get('aspect_ratio', 0):.2f}")
+
             except Exception as e:
                 st.info("Please ensure the card is clearly visible and takes up most of the image.")
                 return
+        
         
         st.divider()
         
@@ -1728,7 +1884,7 @@ def main():
                 try:
                     centering_score = analyze_card_centering(image, contour)
                     scores.append(centering_score)
-                    
+                    print("centering_score : ", centering_score)
                     col1, col2 = st.columns(2)
                     
                     with col1:
