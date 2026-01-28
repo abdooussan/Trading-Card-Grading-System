@@ -8,7 +8,7 @@ from typing import Tuple, Dict, Optional
 class AdvancedCardDetector:
     def __init__(self):
         self.min_card_area_ratio = 0.3  # Card should be at least 30% of image
-        self.max_card_area_ratio = 0.95  # Card should be at most 95% of image
+        self.max_card_area_ratio = 0.99  # Card should be at most 95% of image
         self.aspect_ratio_range = (1.3, 1.8)  # Typical card aspect ratios (credit card ~1.586)
         
     def detect_card_contour(self, image: np.ndarray, debug: bool = False) -> Tuple[np.ndarray, Optional[Dict]]:
@@ -68,8 +68,8 @@ class AdvancedCardDetector:
                         # Check aspect ratio
                         if self.aspect_ratio_range[0] <= aspect_ratio <= self.aspect_ratio_range[1]:
                             # Calculate confidence score
-                            confidence = area_ratio * (1 - abs(aspect_ratio - 1.586) / 1.586)
-                            
+                            #confidence = area_ratio * (1 - abs(aspect_ratio - 1.586) / 1.586)
+                            confidence = area_ratio
                             if confidence > best_score:
                                 best_score = confidence
                                 best_contour = approx
