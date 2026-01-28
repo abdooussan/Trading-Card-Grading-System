@@ -52,7 +52,7 @@ class AdvancedCardDetector:
             approx = cv2.approxPolyDP(contour, epsilon, True)
             
             # Card should have 4 corners
-            if len(approx) == 4:
+            if len(approx):
                 area = cv2.contourArea(approx)
                 area_ratio = area / image_area
                 
